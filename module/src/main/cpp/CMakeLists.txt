@@ -27,9 +27,18 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${C_FLAGS} ${CXX_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINKER_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${LINKER_FLAGS}")
 
+# --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
+
+# 1. Указываем, где лежат наши заголовочные файлы (включая dobby.h)
 include_directories(
         xdl/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include # <-- ДОБАВЛЕНО
 )
+
+# 2. Создаем "цель" для нашей пред-собранной библиотеки Dobby
+add_library(dobby STATIC IMPORTED)
+set_target_properties(dobby PROPERTIES IMPORTED_LOCATION
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/${ANDROID_ABI}/libdobby.a)
 
 aux_source_directory(xdl xdl-src)
 
@@ -38,7 +47,11 @@ add_library(${MODULE_NAME} SHARED
         hack.cpp
         il2cpp_dump.cpp
         ${xdl-src})
-target_link_libraries(${MODULE_NAME} log)
+
+# 3. Указываем нашему модулю, что он должен "линковаться" с Dobby
+target_link_libraries(${MODULE_NAME} log dobby) # <-- ДОБАВЛЕНО dobby
+
+# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_custom_command(TARGET ${MODULE_NAME} POST_BUILD
