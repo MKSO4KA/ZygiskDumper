@@ -1,11 +1,7 @@
-//
-// Created by Perfare on 2020/7/4.
-//
-
-// ИСПРАВЛЕНИЕ 1: Подключаем dobby.h в первую очередь, чтобы типы RegisterContext и HookEntryInfo были известны.
-#include "include/dobby.h"
+// module/src/main/cpp/il2cpp_dump.cpp
 
 #include "il2cpp_dump.h"
+#include "include/dobby.h" // <-- ВКЛЮЧАЕМ DOBBY ЗДЕСЬ
 #include <dlfcn.h>
 #include <cstdlib>
 #include <string>
@@ -26,17 +22,26 @@
 #undef DO_API
 
 // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ПРОСЛУШКИ ---
+static std::map<void*, const MethodInfo*> g_method_map; // Карта для связи адреса с MethodInfo
 static std::map<void*, int> g_call_counts;
 static std::mutex g_mutex;
 static std::ofstream g_log_stream;
 
-// --- УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ВЫЗОВОВ ---
-void generic_pre_handler(RegisterContext *ctx, const HookEntryInfo *info) {
-    // ИСПРАВЛЕНИЕ 3: Более правильное использование lock_guard
+// --- ИСПРАВЛЕННЫЙ УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ВЫЗОВОВ ---
+// Сигнатура изменена в соответствии с dobby.h
+void generic_pre_handler(void *address, DobbyRegisterContext *ctx) {
     std::lock_guard<std::mutex> lock(g_mutex);
 
-    void* method_ptr = (void*)info->function_address;
-    int& count = g_call_counts[method_ptr];
+    // Получаем MethodInfo из нашей глобальной карты
+    const MethodInfo* methodInfo = nullptr;
+    auto it = g_method_map.find(address);
+    if (it != g_method_map.end()) {
+        methodInfo = it->second;
+    }
+
+    if (!methodInfo) return; // Если не нашли, ничего не делаем
+
+    int& count = g_call_counts[address];
     count++;
 
     // Ограничим логирование, чтобы не засорять лог слишком сильно
@@ -44,37 +49,36 @@ void generic_pre_handler(RegisterContext *ctx, const HookEntryInfo *info) {
         return;
     }
 
-    const MethodInfo* methodInfo = (const MethodInfo*)info->user_data;
-    if (!methodInfo) return;
-
     const char* method_name = il2cpp_method_get_name(methodInfo);
     Il2CppClass* klass = il2cpp_method_get_declaring_type(methodInfo);
     const char* class_name = il2cpp_class_get_name(klass);
 
     std::stringstream ss;
-    ss << "[CALL #" << count << " PRE] " << class_name << "::" << method_name << " (at " << method_ptr << ")\n";
+    ss << "[CALL #" << count << " PRE] " << class_name << "::" << method_name << " (at " << address << ")\n";
     ss << "  Args: ";
 
-    // ИСПРАВЛЕНИЕ 2: Код для логирования регистров, работающий на разных архитектурах
+    // Код для логирования регистров, работающий на разных архитектурах
 #if defined(__aarch64__) // arm64-v8a
     for (int i = 0; i < 8; ++i) {
-        ss << "x" << i << "=0x" << std::hex << ctx->general.regs.x[i] << " ";
+        // ИСПРАВЛЕНИЕ 1: Убираем .regs
+        ss << "x" << i << "=0x" << std::hex << ctx->general.x[i] << " ";
     }
 #elif defined(__arm__) // armeabi-v7a
     for (int i = 0; i < 8; ++i) {
-        ss << "r" << i << "=0x" << std::hex << ctx->general.regs.r[i] << " ";
+        // ИСПРАВЛЕНИЕ 2: Убираем .regs
+        ss << "r" << i << "=0x" << std::hex << ctx->general.r[i] << " ";
     }
 #elif defined(__x86_64__) // x86_64
-    ss << "rdi=0x" << std::hex << ctx->general.rdi << " ";
-    ss << "rsi=0x" << std::hex << ctx->general.rsi << " ";
-    ss << "rdx=0x" << std::hex << ctx->general.rdx << " ";
-    ss << "rcx=0x" << std::hex << ctx->general.rcx << " ";
+    ss << "rdi=0x" << std::hex << ctx->general.regs.rdi << " ";
+    ss << "rsi=0x" << std::hex << ctx->general.regs.rsi << " ";
+    ss << "rdx=0x" << std::hex << ctx->general.regs.rdx << " ";
+    ss << "rcx=0x" << std::hex << ctx->general.regs.rcx << " ";
 #elif defined(__i386__) // x86
     // Для x86 аргументы передаются через стек, здесь для примера показаны только общие регистры
-    ss << "eax=0x" << std::hex << ctx->general.eax << " ";
-    ss << "ebx=0x" << std::hex << ctx->general.ebx << " ";
-    ss << "ecx=0x" << std::hex << ctx->general.ecx << " ";
-    ss << "edx=0x" << std::hex << ctx->general.edx << " ";
+    ss << "eax=0x" << std::hex << ctx->general.regs.eax << " ";
+    ss << "ebx=0x" << std::hex << ctx->general.regs.ebx << " ";
+    ss << "ecx=0x" << std::hex << ctx->general.regs.ecx << " ";
+    ss << "edx=0x" << std::hex << ctx->general.regs.edx << " ";
 #endif
     ss << "\n";
 
@@ -110,8 +114,6 @@ void il2cpp_api_init(void *handle) {
         LOGE("Failed to initialize il2cpp api.");
         return;
     }
-    // В Zygisk/Riru модуль загружается до инициализации il2cpp, поэтому эта проверка может быть не нужна
-    // или должна быть выполнена в другом месте. Но оставим ее на всякий случай.
     int retries = 0;
     while (!il2cpp_is_vm_thread(nullptr) && retries < 10) {
         LOGI("Waiting for il2cpp_init... (%d/10)", retries + 1);
@@ -156,8 +158,11 @@ void il2cpp_dump(const char *outDir) {
             void *iter = nullptr;
             while (auto method = il2cpp_class_get_methods(klass, &iter)) {
                 if (method->methodPointer) {
-                    // Передаем method в user_data, чтобы получить информацию о нем в хендлере
-                    DobbyInstrument((void *)method->methodPointer, generic_pre_handler, (void*)method);
+                    void* method_ptr = (void*)method->methodPointer;
+                    // Сохраняем метод в карту
+                    g_method_map[method_ptr] = method;
+                    // Вызываем DobbyInstrument с правильной сигнатурой
+                    DobbyInstrument(method_ptr, generic_pre_handler);
                     hooked_count++;
                 }
             }
