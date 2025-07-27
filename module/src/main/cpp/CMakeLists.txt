@@ -1,3 +1,5 @@
+# module/src/main/cpp/CMakeLists.txt
+
 cmake_minimum_required(VERSION 3.18.1)
 
 if (NOT DEFINED MODULE_NAME)
@@ -32,7 +34,7 @@ set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${LINKER_FLAGS}")
 # 1. Указываем, где лежат наши заголовочные файлы (включая dobby.h)
 include_directories(
         xdl/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/include # <-- ДОБАВЛЕНО
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 # 2. Создаем "цель" для нашей пред-собранной библиотеки Dobby
@@ -49,7 +51,7 @@ add_library(${MODULE_NAME} SHARED
         ${xdl-src})
 
 # 3. Указываем нашему модулю, что он должен "линковаться" с Dobby
-target_link_libraries(${MODULE_NAME} log dobby) # <-- ДОБАВЛЕНО dobby
+target_link_libraries(${MODULE_NAME} log dobby)
 
 # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 

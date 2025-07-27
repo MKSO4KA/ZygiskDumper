@@ -1,9 +1,7 @@
-//
-// Created by Perfare on 2020/7/4.
-//
+// module/src/main/cpp/hack.cpp
 
 #include "hack.h"
-#include "il2cpp_dump.h"
+#include "il2cpp_dump.h"  // <--- ДОБАВЬТЕ ЭТУ СТРОКУ
 #include "log.h"
 #include "xdl.h"
 #include <cstring>
@@ -17,24 +15,11 @@
 #include <linux/unistd.h>
 #include <array>
 
+// Эта функция теперь будет основной точкой входа для нашего потока
 void hack_start(const char *game_data_dir) {
-    bool load = false;
-    for (int i = 0; i < 10; i++) {
-        void *handle = xdl_open("libil2cpp.so", 0);
-        if (handle) {
-            load = true;
-            // Просто вызываем инициализацию и основной дамп.
-            // Вся логика сканирования теперь внутри il2cpp_dump.
-            il2cpp_api_init(handle);
-            il2cpp_dump(game_data_dir);
-            break;
-        } else {
-            sleep(1);
-        }
-    }
-    if (!load) {
-        LOGI("libil2cpp.so not found in thread %d", gettid());
-    }
+    // Вызываем нашу новую функцию-инициализатор, которая только ставит хуки
+    start_dump_process(game_data_dir);
+    // Больше ничего не делаем. Ждем, пока игра вызовет il2cpp_init.
 }
 
 std::string GetLibDir(JavaVM *vms) {
@@ -84,7 +69,6 @@ std::string GetLibDir(JavaVM *vms) {
     }
     return {};
 }
-
 static std::string GetNativeBridgeLibrary() {
     auto value = std::array<char, PROP_VALUE_MAX>();
     __system_property_get("ro.dalvik.vm.native.bridge", value.data());
