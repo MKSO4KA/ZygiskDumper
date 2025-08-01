@@ -48,6 +48,7 @@ add_library(${MODULE_NAME} SHARED
         main.cpp
         hack.cpp
         il2cpp_dump.cpp
+        signature.cpp   # <-- Добавьте эту строку
         ${xdl-src})
 
 # 3. Указываем нашему модулю, что он должен "линковаться" с Dobby

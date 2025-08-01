@@ -1,6 +1,7 @@
-// module/src/main/cpp/il2cpp_dump.cpp
+// module/src/main/cpp/il2cpp_dump.cpp (ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ)
 
 #include "il2cpp_dump.h"
+#include "signature.h"
 #include <dlfcn.h>
 #include <cstdlib>
 #include <string>
@@ -173,123 +174,103 @@ void il2cpp_dump(const char *outDir) {
 }
 
 void dump_thread_func(const char* game_data_dir) {
-    LOGI("dump_thread_func started in thread %d", gettid());
+    LOGI("dump_thread_func started, waiting for game to initialize...");
+    sleep(30);
 
-    // 1. Ожидаем загрузки libil2cpp.so
-    void *handle = nullptr;
-    do {
-        handle = xdl_open("libil2cpp.so", 0);
-        if (handle) break;
-        sleep(1);
-    } while (true);
+    void *handle = xdl_open("libil2cpp.so", 0);
+    if (!handle) {
+        LOGE("Failed to get handle for libil2cpp.so after waiting.");
+        return;
+    }
     LOGI("libil2cpp.so handle: %p", handle);
 
-    // 2. Находим базовый адрес и размер библиотеки
     xdl_info_t dlInfo;
     void *xdl_cache = nullptr;
-    if (xdl_addr(xdl_sym(handle, "il2cpp_init", nullptr), &dlInfo, &xdl_cache)) {
-        il2cpp_base = reinterpret_cast<uint64_t>(dlInfo.dli_fbase);
-        LOGI("il2cpp_base: %" PRIx64"", il2cpp_base);
-    } else {
-        LOGE("Failed to get il2cpp_base address.");
+    if (!xdl_addr(xdl_sym(handle, "il2cpp_init", nullptr), &dlInfo, &xdl_cache)) {
+        LOGE("Failed to get info for libil2cpp.so");
         xdl_addr_clean(&xdl_cache);
         return;
     }
 
-    size_t lib_size = 0;
-    for(int i = 0; i < dlInfo.dlpi_phnum; ++i) {
+    il2cpp_base = reinterpret_cast<uintptr_t>(dlInfo.dli_fbase);
+    LOGI("il2cpp_base: 0x%" PRIx64, il2cpp_base);
+
+    uintptr_t min_vaddr = UINTPTR_MAX;
+    uintptr_t max_vaddr = 0;
+    for (int i = 0; i < dlInfo.dlpi_phnum; ++i) {
         const ElfW(Phdr)* phdr = &dlInfo.dlpi_phdr[i];
-        // Ищем самый большой загружаемый сегмент, это и будет примерный размер библиотеки
         if (phdr->p_type == PT_LOAD) {
-            if(phdr->p_memsz > lib_size) {
-                lib_size = phdr->p_memsz;
-            }
+            if (phdr->p_vaddr < min_vaddr) min_vaddr = phdr->p_vaddr;
+            if (phdr->p_vaddr + phdr->p_memsz > max_vaddr) max_vaddr = phdr->p_vaddr + phdr->p_memsz;
         }
     }
-    // Выравниваем размер до страницы памяти
-    lib_size = (lib_size + getpagesize() - 1) & ~(getpagesize() - 1);
+    size_t lib_size = max_vaddr - min_vaddr;
 
     if (lib_size == 0) {
-        LOGE("Could not determine library size for dumping.");
+        LOGE("Could not determine library size.");
         xdl_addr_clean(&xdl_cache);
         return;
     }
-    LOGI("Library size for dump: %zu bytes", lib_size);
-
-    // --- НОВЫЙ БЛОК: ДАМП libil2cpp.so ИЗ ПАМЯТИ ---
-    std::string lib_dump_path(game_data_dir);
-    lib_dump_path += "/libil2cpp_dumped.so";
-    LOGI("Dumping in-memory libil2cpp.so to: %s", lib_dump_path.c_str());
-    std::ofstream lib_file(lib_dump_path, std::ios::binary | std::ios::out | std::ios::trunc);
-    if (lib_file.is_open()) {
-        lib_file.write(reinterpret_cast<const char*>(il2cpp_base), lib_size);
-        lib_file.close();
-        LOGI("Successfully dumped libil2cpp.so from memory!");
-    } else {
-        LOGE("Failed to open file for writing libil2cpp.so dump.");
-    }
-    // --- КОНЕЦ НОВОГО БЛОКА ---
 
     LOGI("Scanning memory range: 0x%" PRIx64 " to 0x%" PRIx64, il2cpp_base, il2cpp_base + lib_size);
 
-    // 3. Находим указатели на метаданные
-    // Сначала пробуем через dsym (быстрее, но может не найти стрипнутые символы)
-    void* s_GlobalMetadata_ptr = xdl_dsym(handle, "s_GlobalMetadata", nullptr);
-    void* s_GlobalMetadataHeader_ptr = xdl_dsym(handle, "s_GlobalMetadataHeader", nullptr);
+    // 3. Находим указатели на метаданные через СИГНАТУРЫ
+    // Сигнатуры, найденные в Ghidra.
+    const char* header_sig = "20 D4 FE 90 00 64 2E 91";
+    const char* metadata_sig = "40 D2 FE F0 00 D4 21 91";
 
-    // Если не нашли, пробуем через sym (медленнее, но ищет в полной таблице символов)
-    if (!s_GlobalMetadata_ptr) {
-        LOGI("s_GlobalMetadata not found with dsym, trying with sym...");
-        s_GlobalMetadata_ptr = xdl_sym(handle, "s_GlobalMetadata", nullptr);
-    }
-    if (!s_GlobalMetadataHeader_ptr) {
-        LOGI("s_GlobalMetadataHeader not found with dsym, trying with sym...");
-        s_GlobalMetadataHeader_ptr = xdl_sym(handle, "s_GlobalMetadataHeader", nullptr);
-    }
+    uintptr_t s_GlobalMetadataHeader_ptr_addr = find_and_resolve_signature(il2cpp_base, il2cpp_base + lib_size, header_sig);
+    uintptr_t s_GlobalMetadata_ptr_addr = find_and_resolve_signature(il2cpp_base, il2cpp_base + lib_size, metadata_sig);
 
-    if (!s_GlobalMetadata_ptr || !s_GlobalMetadataHeader_ptr) {
-        LOGE("Could not find s_GlobalMetadata or s_GlobalMetadataHeader symbols.");
+    if (!s_GlobalMetadataHeader_ptr_addr || !s_GlobalMetadata_ptr_addr) {
+        LOGE("Could not find metadata pointers using signatures.");
+        LOGE("Header address: 0x%" PRIxPTR, s_GlobalMetadataHeader_ptr_addr);
+        LOGE("Metadata address: 0x%" PRIxPTR, s_GlobalMetadata_ptr_addr);
         xdl_addr_clean(&xdl_cache);
         return;
     }
-    LOGI("Found s_GlobalMetadata and s_GlobalMetadataHeader pointers.");
+
+    LOGI("Found metadata pointers via signatures: Header at 0x%" PRIxPTR ", Metadata at 0x%" PRIxPTR, s_GlobalMetadataHeader_ptr_addr, s_GlobalMetadata_ptr_addr);
+
+    void** s_GlobalMetadataHeader_ptr = (void**)s_GlobalMetadataHeader_ptr_addr;
+    void** s_GlobalMetadata_ptr = (void**)s_GlobalMetadata_ptr_addr;
 
     // 4. Ожидаем, пока il2cpp_init не отработает
     Il2CppGlobalMetadataHeader* header = nullptr;
     bool sanity_ok = false;
     int wait_time = 0;
-    const int max_wait_time = 60; // Ждем максимум 60 секунд
+    const int max_wait_time = 60;
 
-    LOGI("Waiting for il2cpp_init to complete by polling metadata header...");
+    LOGI("Waiting for metadata to be ready by polling header...");
     while (wait_time < max_wait_time) {
-        header = *(Il2CppGlobalMetadataHeader**)s_GlobalMetadataHeader_ptr;
-        if (header && header->sanity == 0xFAB11BAF) {
-            sanity_ok = true;
-            break;
+        if (*s_GlobalMetadataHeader_ptr) {
+            header = (Il2CppGlobalMetadataHeader*)*s_GlobalMetadataHeader_ptr;
+            if (header->sanity == 0xFAB11BAF) {
+                sanity_ok = true;
+                break;
+            }
         }
         sleep(1);
         wait_time++;
     }
 
     if (!sanity_ok) {
-        LOGE("Timed out waiting for il2cpp_init. Metadata header sanity check failed.");
+        LOGE("Timed out waiting for metadata. Sanity check failed.");
         xdl_addr_clean(&xdl_cache);
         return;
     }
 
-    LOGI("il2cpp_init completed. Proceeding with dump.");
+    LOGI("Metadata is ready. Proceeding with dump.");
 
     // 5. Дампим расшифрованные метаданные
-    void* metadata = *(void**)s_GlobalMetadata_ptr;
+    void* metadata = *s_GlobalMetadata_ptr;
     size_t metadata_size = header->exportedTypeDefinitionsOffset + (header->exportedTypeDefinitionsCount * sizeof(int32_t));
 
-    LOGI("Metadata Version: %d, Size: %zu bytes", header->version, metadata_size);
+    LOGI("Metadata Version: %d, Size: %llu bytes", header->version, (unsigned long long)metadata_size);
 
     if (metadata && metadata_size > 0) {
         std::string out_path(game_data_dir);
         out_path += "/global-metadata-decrypted.dat";
-
-        LOGI("Dumping decrypted metadata to: %s", out_path.c_str());
         std::ofstream metadata_file(out_path, std::ios::binary | std::ios::out | std::ios::trunc);
         if (metadata_file.is_open()) {
             metadata_file.write(static_cast<const char*>(metadata), metadata_size);
@@ -310,12 +291,10 @@ void dump_thread_func(const char* game_data_dir) {
         LOGE("Failed to initialize il2cpp api for address dump.");
     }
 
-    // Очищаем кэш после использования
     xdl_addr_clean(&xdl_cache);
 }
 
 // Эта функция вызывается из hack.cpp
 void start_dump_process(const char* game_data_dir) {
-    // Запускаем всю логику в отдельном потоке, чтобы не блокировать игру
     std::thread(dump_thread_func, game_data_dir).detach();
 }
