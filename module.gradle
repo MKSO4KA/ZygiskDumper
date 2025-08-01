@@ -1,9 +1,65 @@
+// Загружаем свойства из файла version.properties
+def versionPropsFile = rootProject.file('version.properties')
+def versionProps = new Properties()
+versionProps.load(new FileInputStream(versionPropsFile))
+
+// Преобразуем свойства в переменные
+def major = versionProps['VERSION_MAJOR'].toInteger()
+def minor = versionProps['VERSION_MINOR'].toInteger()
+def patch = versionProps['VERSION_PATCH'].toInteger()
+def code = versionProps['VERSION_CODE'].toInteger()
+
+// Устанавливаем переменные модуля, которые будут использоваться в сборке
 ext {
     moduleLibraryName = "il2cppdumper"
     magiskModuleId = "zygisk_il2cppdumper"
     moduleName = "Il2CppDumper"
     moduleAuthor = "Perfare"
     moduleDescription = "Il2CppDumper Zygisk version."
-    moduleVersion = "v1.2.0"
-    moduleVersionCode = 1
+    // Собираем строку версии в формате v1.2.0
+    moduleVersion = "v${major}.${minor}.${patch}"
+    // Используем versionCode из файла
+    moduleVersionCode = code
+}
+
+// Создаем задачу для увеличения версии
+task incrementVersion {
+    doLast {
+        // Снова читаем файл, чтобы получить самые актуальные значения
+        def currentProps = new Properties()
+        currentProps.load(new FileInputStream(versionPropsFile))
+
+        def newMajor = currentProps['VERSION_MAJOR'].toInteger()
+        def newMinor = currentProps['VERSION_MINOR'].toInteger()
+        def newPatch = currentProps['VERSION_PATCH'].toInteger()
+        def newCode = currentProps['VERSION_CODE'].toInteger()
+
+        // Логика инкрементации
+        newPatch++
+        if (newPatch > 9) {
+            newPatch = 0
+            newMinor++
+        }
+        // Если минорная версия станет слишком большой, можно добавить логику для мажорной
+        // if (newMinor > 99) {
+        //     newMinor = 0
+        //     newMajor++
+        // }
+
+        newCode++ // Всегда увеличиваем versionCode
+
+        // Записываем новые значения обратно в файл
+        versionPropsFile.withWriter { writer ->
+            writer.writeLine("# Версия модуля")
+            writer.writeLine("VERSION_MAJOR=${newMajor}")
+            writer.writeLine("VERSION_MINOR=${newMinor}")
+            writer.writeLine("VERSION_PATCH=${newPatch}")
+            writer.writeLine("")
+            writer.writeLine("# Этот код будет увеличиваться на 1 с каждой сборкой")
+            writer.writeLine("VERSION_CODE=${newCode}")
+        }
+
+        // Выводим в консоль новую версию для информации
+        println "Версия обновлена до: v${newMajor}.${newMinor}.${newPatch} (Code: ${newCode})"
+    }
 }

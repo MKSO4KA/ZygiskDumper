@@ -38,9 +38,9 @@ include_directories(
 )
 
 # 2. Создаем "цель" для нашей пред-собранной библиотеки Dobby
-add_library(dobby STATIC IMPORTED)
-set_target_properties(dobby PROPERTIES IMPORTED_LOCATION
-        ${CMAKE_CURRENT_SOURCE_DIR}/libs/${ANDROID_ABI}/libdobby.a)
+#add_library(dobby STATIC IMPORTED)
+#set_target_properties(dobby PROPERTIES IMPORTED_LOCATION
+#        ${CMAKE_CURRENT_SOURCE_DIR}/libs/${ANDROID_ABI}/libdobby.a)
 
 aux_source_directory(xdl xdl-src)
 
@@ -51,8 +51,8 @@ add_library(${MODULE_NAME} SHARED
         ${xdl-src})
 
 # 3. Указываем нашему модулю, что он должен "линковаться" с Dobby
-target_link_libraries(${MODULE_NAME} log dobby)
-
+#target_link_libraries(${MODULE_NAME} log dobby)
+target_link_libraries(${MODULE_NAME} log)
 # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")

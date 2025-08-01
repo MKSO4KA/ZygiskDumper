@@ -103,5 +103,12 @@ afterEvaluate {
         }
 
         variant.assembleProvider.get().finalizedBy("zip${variantCapped}")
+        // --- ДОБАВЬТЕ ЭТОТ БЛОК ---
+        // Если это релизная сборка, то после создания zip-архива
+        // мы запускаем задачу инкрементации версии из корневого проекта.
+        if (variant.name == "release") {
+            tasks.named("zip${variantCapped}").get().finalizedBy(rootProject.tasks.named('incrementVersion'))
+        }
+        // --- КОНЕЦ БЛОКА ---
     }
 }
